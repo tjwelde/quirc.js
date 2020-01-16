@@ -135,7 +135,7 @@
 
 	function success(stream) {
 		console.log('success', stream);
-		video.src = window.URL.createObjectURL(stream);
+		video.srcObject = stream;
 		video.onclick = function() { video.play(); };
 		video.play();
 
@@ -157,9 +157,6 @@
 				document.body.appendChild(canvas);
 
 				log('start');
-				
-				Module.onDecoded(decoded);
-				Module.onCounted(counted);
 				
 				image = Module._xsetup(width, height);
 				log('_xsetup', image, 'pointer');

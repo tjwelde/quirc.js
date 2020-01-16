@@ -12,13 +12,13 @@ var
 
 var HAVE_NFT = 0;
 
-var EMSCRIPTEN_PATH = process.env.EMSCRIPTEN;
+var EMSCRIPTEN_PATH = process.env.EMSCRIPTEN_ROOT;
 
-if (!EMSCRIPTEN_PATH) {
-	console.log("\nWarning: EMSCRIPTEN environment variable not found.")
-	console.log("If you get a \"command not found\" error,\ndo `source <path to emsdk>/emsdk_env.sh` and try again.");
-	process.exit(1)
-}
+// if (!EMSCRIPTEN_PATH) {
+// 	console.log("\nWarning: EMSCRIPTEN environment variable not found.")
+// 	console.log("If you get a \"command not found\" error,\ndo `source <path to emsdk>/emsdk_env.sh` and try again.");
+// 	process.exit(1)
+// }
 
 var EMCC = EMSCRIPTEN_PATH ? path.resolve(EMSCRIPTEN_PATH, 'emcc') : 'emcc';
 var OPTIMIZE_FLAGS = ' -Oz '; // -Oz for smallest size
@@ -41,7 +41,7 @@ var DEFINES = ' ';
 var FLAGS = '' + OPTIMIZE_FLAGS;
 // FLAGS += ' -Wno-warn-absolute-paths ';
 FLAGS += ' -s TOTAL_MEMORY=' + MEM + ' ';
-FLAGS += ' -s NO_BROWSER=1 '; // for 20k less
+// FLAGS += ' -s NO_BROWSER=1 '; // for 20k less
 FLAGS += ' --memory-init-file 0 '; // for memless file
 
 

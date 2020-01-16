@@ -1,6 +1,7 @@
+#include <emscripten.h>
 extern "C" {
-	#include <emscripten.h>
 	#include <quirc.h>
+	#include <stdio.h>
 
 	struct quirc *qr;
 	uint8_t *image;
