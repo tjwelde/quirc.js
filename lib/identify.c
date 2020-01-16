@@ -14,6 +14,7 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+#include <limits.h>
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
@@ -98,8 +99,8 @@ static void perspective_map(const double *c,
 	double x = (c[0]*u + c[1]*v + c[2]) / den;
 	double y = (c[3]*u + c[4]*v + c[5]) / den;
 
-	ret->x = rint(x);
-	ret->y = rint(y);
+	ret->x = (int) rint(x);
+	ret->y = (int) rint(y);
 }
 
 static void perspective_unmap(const double *c,
@@ -132,7 +133,7 @@ static void flood_fill_seed(struct quirc *q, int x, int y, int from, int to,
 	int left = x;
 	int right = x;
 	int i;
-	uint8_t *row = q->image + y * q->w;
+	quirc_pixel_t *row = q->pixels + y * q->w;
 
 	if (depth >= FLOOD_FILL_MAX_DEPTH)
 		return;
@@ -152,7 +153,7 @@ static void flood_fill_seed(struct quirc *q, int x, int y, int from, int to,
 
 	/* Seed new flood-fills */
 	if (y > 0) {
-		row = q->image + (y - 1) * q->w;
+		row = q->pixels + (y - 1) * q->w;
 
 		for (i = left; i <= right; i++)
 			if (row[i] == from)
@@ -161,7 +162,7 @@ static void flood_fill_seed(struct quirc *q, int x, int y, int from, int to,
 	}
 
 	if (y < q->h - 1) {
-		row = q->image + (y + 1) * q->w;
+		row = q->pixels + (y + 1) * q->w;
 
 		for (i = left; i <= right; i++)
 			if (row[i] == from)
@@ -174,52 +175,55 @@ static void flood_fill_seed(struct quirc *q, int x, int y, int from, int to,
  * Adaptive thresholding
  */
 
-#define THRESHOLD_S_DEN		8
-#define THRESHOLD_T		5
-
-static void threshold(struct quirc *q)
+static uint8_t otsu(const struct quirc *q)
 {
-	int x, y;
-	int avg_w = 0;
-	int avg_u = 0;
-	int threshold_s = q->w / THRESHOLD_S_DEN;
-	uint8_t *row = q->image;
+	int numPixels = q->w * q->h;
 
-	for (y = 0; y < q->h; y++) {
-		int row_average[q->w];
-
-		memset(row_average, 0, sizeof(row_average));
-
-		for (x = 0; x < q->w; x++) {
-			int w, u;
-
-			if (y & 1) {
-				w = x;
-				u = q->w - 1 - x;
-			} else {
-				w = q->w - 1 - x;
-				u = x;
-			}
-
-			avg_w = (avg_w * (threshold_s - 1)) /
-				threshold_s + row[w];
-			avg_u = (avg_u * (threshold_s - 1)) /
-				threshold_s + row[u];
-
-			row_average[w] += avg_w;
-			row_average[u] += avg_u;
-		}
-
-		for (x = 0; x < q->w; x++) {
-			if (row[x] < row_average[x] *
-			    (100 - THRESHOLD_T) / (200 * threshold_s))
-				row[x] = QUIRC_PIXEL_BLACK;
-			else
-				row[x] = QUIRC_PIXEL_WHITE;
-		}
-
-		row += q->w;
+	// Calculate histogram
+	const int HISTOGRAM_SIZE = 256;
+	unsigned int histogram[HISTOGRAM_SIZE];
+	memset(histogram, 0, (HISTOGRAM_SIZE) * sizeof(unsigned int));
+	uint8_t* ptr = q->image;
+	int length = numPixels;
+	while (length--) {
+		uint8_t value = *ptr++;
+		histogram[value]++;
 	}
+
+	// Calculate weighted sum of histogram values
+	int sum = 0;
+	for (int i = 0; i < HISTOGRAM_SIZE; ++i) {
+		sum += i * histogram[i];
+	}
+
+	// Compute threshold
+	int sumB = 0;
+	int q1 = 0;
+	double max = 0;
+	uint8_t threshold = 0;
+	for (int i = 0; i < HISTOGRAM_SIZE; ++i) {
+		// Weighted background
+		q1 += histogram[i];
+		if (q1 == 0)
+			continue;
+
+		// Weighted foreground
+		const int q2 = numPixels - q1;
+		if (q2 == 0)
+			break;
+
+		sumB += i * histogram[i];
+		const double m1 = (double)sumB / q1;
+		const double m2 = ((double)sum - sumB) / q2;
+		const double m1m2 = m1 - m2;
+		const double variance = m1m2 * m1m2 * q1 * q2;
+		if (variance >= max) {
+			threshold = i;
+			max = variance;
+		}
+	}
+
+	return threshold;
 }
 
 static void area_count(void *user_data, int y, int left, int right)
@@ -236,7 +240,7 @@ static int region_code(struct quirc *q, int x, int y)
 	if (x < 0 || y < 0 || x >= q->w || y >= q->h)
 		return -1;
 
-	pixel = q->image[y * q->w + x];
+	pixel = q->pixels[y * q->w + x];
 
 	if (pixel >= QUIRC_PIXEL_REGION)
 		return pixel;
@@ -415,9 +419,9 @@ static void test_capstone(struct quirc *q, int x, int y, int *pb)
 
 static void finder_scan(struct quirc *q, int y)
 {
-	uint8_t *row = q->image + y * q->w;
+	quirc_pixel_t *row = q->pixels + y * q->w;
 	int x;
-	int last_color;
+	int last_color = 0;
 	int run_length = 0;
 	int run_count = 0;
 	int pb[5];
@@ -592,7 +596,7 @@ static int timing_scan(const struct quirc *q,
 		if (y < 0 || y >= q->h || x < 0 || x >= q->w)
 			break;
 
-		pixel = q->image[y * q->w + x];
+		pixel = q->pixels[y * q->w + x];
 
 		if (pixel) {
 			if (run_length >= 2)
@@ -670,7 +674,7 @@ static int read_cell(const struct quirc *q, int index, int x, int y)
 	if (p.y < 0 || p.y >= q->h || p.x < 0 || p.x >= q->w)
 		return 0;
 
-	return q->image[p.y * q->w + p.x] ? 1 : -1;
+	return q->pixels[p.y * q->w + p.x] ? 1 : -1;
 }
 
 static int fitness_cell(const struct quirc *q, int index, int x, int y)
@@ -689,7 +693,7 @@ static int fitness_cell(const struct quirc *q, int index, int x, int y)
 			if (p.y < 0 || p.y >= q->h || p.x < 0 || p.x >= q->w)
 				continue;
 
-			if (q->image[p.y * q->w + p.x])
+			if (q->pixels[p.y * q->w + p.x])
 				score++;
 			else
 				score--;
@@ -763,7 +767,7 @@ static int fitness_all(const struct quirc *q, int index)
 
 	/* Check alignment patterns */
 	ap_count = 0;
-	while (info->apat[ap_count])
+	while ((ap_count < QUIRC_MAX_ALIGNMENT) && info->apat[ap_count])
 		ap_count++;
 
 	for (i = 1; i + 1 < ap_count; i++) {
@@ -848,8 +852,8 @@ static void rotate_capstone(struct quirc_capstone *cap,
 {
 	struct quirc_point copy[4];
 	int j;
-	int best;
-	int best_score;
+	int best = 0;
+	int best_score = INT_MAX;
 
 	for (j = 0; j < 4; j++) {
 		struct quirc_point *p = &cap->corners[j];
@@ -1066,6 +1070,21 @@ static void test_grouping(struct quirc *q, int i)
 	test_neighbours(q, i, &hlist, &vlist);
 }
 
+static void pixels_setup(struct quirc *q, uint8_t threshold)
+{
+	if (QUIRC_PIXEL_ALIAS_IMAGE) {
+		q->pixels = (quirc_pixel_t *)q->image;
+	}
+
+	uint8_t* source = q->image;
+	quirc_pixel_t* dest = q->pixels;
+	int length = q->w * q->h;
+	while (length--) {
+		uint8_t value = *source++;
+		*dest++ = (value < threshold) ? QUIRC_PIXEL_BLACK : QUIRC_PIXEL_WHITE;
+	}
+}
+
 uint8_t *quirc_begin(struct quirc *q, int *w, int *h)
 {
 	q->num_regions = QUIRC_PIXEL_REGION;
@@ -1084,7 +1103,8 @@ void quirc_end(struct quirc *q)
 {
 	int i;
 
-	threshold(q);
+	uint8_t threshold = otsu(q);
+	pixels_setup(q, threshold);
 
 	for (i = 0; i < q->h; i++)
 		finder_scan(q, i);

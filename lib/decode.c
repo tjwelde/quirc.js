@@ -117,7 +117,7 @@ static const uint8_t gf256_log[256] = {
 	0x74, 0xd6, 0xf4, 0xea, 0xa8, 0x50, 0x58, 0xaf
 };
 
-const static struct galois_field gf256 = {
+static const struct galois_field gf256 = {
 	.p = 255,
 	.log = gf256_log,
 	.exp = gf256_exp
@@ -126,30 +126,6 @@ const static struct galois_field gf256 = {
 /************************************************************************
  * Polynomial operations
  */
-
-static void poly_mult(uint8_t *r, const uint8_t *a, const uint8_t *b,
-		      const struct galois_field *gf)
-{
-	int i;
-
-	memset(r, 0, MAX_POLY);
-
-	for (i = 0; i < MAX_POLY; i++) {
-		int j;
-
-		for (j = 0; j + i < MAX_POLY; j++) {
-			uint8_t ca = a[i];
-			uint8_t cb = b[j];
-
-			if (!(ca && cb))
-				continue;
-
-			r[i + j] ^= gf->exp[(gf->log[ca] +
-					     gf->log[cb]) %
-					    gf->p];
-		}
-	}
-}
 
 static void poly_add(uint8_t *dst, const uint8_t *src, uint8_t c,
 		     int shift, const struct galois_field *gf)
@@ -274,7 +250,7 @@ static int block_syndromes(const uint8_t *data, int bs, int npar, uint8_t *s)
 				continue;
 
 			s[i] ^= gf256_exp[((int)gf256_log[c] +
-					  (i + 1) * j) % 255];
+				    i * j) % 255];
 		}
 
 		if (s[i])
@@ -284,9 +260,41 @@ static int block_syndromes(const uint8_t *data, int bs, int npar, uint8_t *s)
 	return nonzero;
 }
 
-static quirc_decode_error_t correct_block(uint8_t *data, const struct quirc_rs_params *ecc)
+static void eloc_poly(uint8_t *omega,
+		      const uint8_t *s, const uint8_t *sigma,
+		      int npar)
 {
-	int npar = ecc->ce;
+	int i;
+
+	memset(omega, 0, MAX_POLY);
+
+	for (i = 0; i < npar; i++) {
+		const uint8_t a = sigma[i];
+		const uint8_t log_a = gf256_log[a];
+		int j;
+
+		if (!a)
+			continue;
+
+		for (j = 0; j + 1 < MAX_POLY; j++) {
+			const uint8_t b = s[j + 1];
+
+			if (i + j >= npar)
+				break;
+
+			if (!b)
+				continue;
+
+			omega[i + j] ^=
+			    gf256_exp[(log_a + gf256_log[b]) % 255];
+		}
+	}
+}
+
+static quirc_decode_error_t correct_block(uint8_t *data,
+					  const struct quirc_rs_params *ecc)
+{
+	int npar = ecc->bs - ecc->dw;
 	uint8_t s[MAX_POLY];
 	uint8_t sigma[MAX_POLY];
 	uint8_t sigma_deriv[MAX_POLY];
@@ -305,8 +313,7 @@ static quirc_decode_error_t correct_block(uint8_t *data, const struct quirc_rs_p
 		sigma_deriv[i] = sigma[i + 1];
 
 	/* Compute error evaluator polynomial */
-	poly_mult(omega, sigma, s, &gf256);
-	memset(omega + npar, 0, MAX_POLY - npar);
+	eloc_poly(omega, s, sigma, npar - 1);
 
 	/* Find error locations and magnitudes */
 	for (i = 0; i < ecc->bs; i++) {
@@ -569,10 +576,11 @@ static quirc_decode_error_t codestream_ecc(struct quirc_data *data,
 		&quirc_version_db[data->version];
 	const struct quirc_rs_params *sb_ecc = &ver->ecc[data->ecc_level];
 	struct quirc_rs_params lb_ecc;
-	int bc = ver->data_bytes / sb_ecc->bs;
+	const int lb_count =
+	    (ver->data_bytes - sb_ecc->bs * sb_ecc->ns) / (sb_ecc->bs + 1);
+	const int bc = lb_count + sb_ecc->ns;
+	const int ecc_offset = sb_ecc->dw * bc + lb_count;
 	int dst_offset = 0;
-	int lb_count = ver->data_bytes - bc * sb_ecc->bs;
-	int small_dw_total = bc * sb_ecc->dw;
 	int i;
 
 	memcpy(&lb_ecc, sb_ecc, sizeof(lb_ecc));
@@ -581,22 +589,16 @@ static quirc_decode_error_t codestream_ecc(struct quirc_data *data,
 
 	for (i = 0; i < bc; i++) {
 		uint8_t *dst = ds->data + dst_offset;
-		const struct quirc_rs_params *ecc = sb_ecc;
+		const struct quirc_rs_params *ecc =
+		    (i < sb_ecc->ns) ? sb_ecc : &lb_ecc;
+		const int num_ec = ecc->bs - ecc->dw;
 		quirc_decode_error_t err;
-		int j = 0;
-		int k;
+		int j;
 
-		for (k = 0; k < sb_ecc->dw; k++)
-			dst[j++] = ds->raw[k * bc + i];
-
-		if (i + lb_count >= bc) {
-			dst[j++] = ds->raw[small_dw_total + i - lb_count];
-			ecc = &lb_ecc;
-		}
-
-		for (k = 0; k < sb_ecc->bs - sb_ecc->dw; k++)
-			dst[j++] = ds->raw[small_dw_total + lb_count + i +
-					   k * bc];
+		for (j = 0; j < ecc->dw; j++)
+			dst[j] = ds->raw[j * bc + i];
+		for (j = 0; j < num_ec; j++)
+			dst[ecc->dw + j] = ds->raw[ecc_offset + j * bc + i];
 
 		err = correct_block(dst, ecc);
 		if (err)
@@ -722,10 +724,10 @@ static quirc_decode_error_t decode_alpha(struct quirc_data *data,
 	int bits = 13;
 	int count;
 
-	if (data->version < 7)
+	if (data->version < 10)
 		bits = 9;
-	else if (data->version < 11)
-		bits = 10;
+	else if (data->version < 27)
+		bits = 11;
 
 	count = take_bits(ds, bits);
 	if (data->payload_len + count + 1 > QUIRC_MAX_PAYLOAD)
@@ -788,15 +790,44 @@ static quirc_decode_error_t decode_kanji(struct quirc_data *data,
 
 	for (i = 0; i < count; i++) {
 		int d = take_bits(ds, 13);
+		int msB = d / 0xc0;
+		int lsB = d % 0xc0;
+		int intermediate = (msB << 8) | lsB;
 		uint16_t sjw;
 
-		if (d + 0x8140 >= 0x9ffc)
-			sjw = d + 0x8140;
-		else
-			sjw = d + 0xc140;
+		if (intermediate + 0x8140 <= 0x9ffc) {
+			/* bytes are in the range 0x8140 to 0x9FFC */
+			sjw = intermediate + 0x8140;
+		} else {
+			/* bytes are in the range 0xE040 to 0xEBBF */
+			sjw = intermediate + 0xc140;
+		}
 
 		data->payload[data->payload_len++] = sjw >> 8;
 		data->payload[data->payload_len++] = sjw & 0xff;
+	}
+
+	return QUIRC_SUCCESS;
+}
+
+static quirc_decode_error_t decode_eci(struct quirc_data *data,
+				       struct datastream *ds)
+{
+	if (bits_remaining(ds) < 8)
+		return QUIRC_ERROR_DATA_UNDERFLOW;
+
+	data->eci = take_bits(ds, 8);
+
+	if ((data->eci & 0xc0) == 0x80) {
+		if (bits_remaining(ds) < 8)
+			return QUIRC_ERROR_DATA_UNDERFLOW;
+
+		data->eci = (data->eci << 8) | take_bits(ds, 8);
+	} else if ((data->eci & 0xe0) == 0xc0) {
+		if (bits_remaining(ds) < 16)
+			return QUIRC_ERROR_DATA_UNDERFLOW;
+
+		data->eci = (data->eci << 16) | take_bits(ds, 16);
 	}
 
 	return QUIRC_SUCCESS;
@@ -826,6 +857,10 @@ static quirc_decode_error_t decode_payload(struct quirc_data *data,
 			err = decode_kanji(data, ds);
 			break;
 
+		case 7:
+			err = decode_eci(data, ds);
+			break;
+
 		default:
 			goto done;
 		}
@@ -833,13 +868,13 @@ static quirc_decode_error_t decode_payload(struct quirc_data *data,
 		if (err)
 			return err;
 
-		if (type > data->data_type)
+		if (!(type & (type - 1)) && (type > data->data_type))
 			data->data_type = type;
 	}
 done:
 
 	/* Add nul terminator to all payloads */
-	if (data->payload_len >= sizeof(data->payload))
+	if (data->payload_len >= (int) sizeof(data->payload))
 		data->payload_len--;
 	data->payload[data->payload_len] = 0;
 
