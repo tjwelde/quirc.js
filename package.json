@@ -16,8 +16,8 @@
   },
   "author": "Daniel Beer <dlbeer@gmail.com> (https://github.com/dlbeer)",
   "contributors": [
-	"Joshua Koo (https://github.com/zz85)",
-	"Karanvir Kang <karankang007@gmail.com> (https://github.com/karankang007)"
+    "Joshua Koo (https://github.com/zz85)",
+    "Karanvir Kang <karankang007@gmail.com> (https://github.com/karankang007)"
   ],
   "license": "LicenseRef-LICENSE",
   "bugs": {
@@ -25,9 +25,12 @@
   },
   "homepage": "https://github.com/zz85/quirc.js",
   "browser": {
-	"fs" : false,
-	"path": false,
-	"crypto": false,
-	"ws": false
+    "fs": false,
+    "path": false,
+    "crypto": false,
+    "ws": false
+  },
+  "dependencies": {
+    "qrcode": "^1.4.4"
   }
 }

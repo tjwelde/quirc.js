@@ -1,0 +1,27 @@
+<html>
+<head>
+	<meta name="viewport" content="width=device-width, initial-scale=0.75">
+	<script src="node_modules/qrcode/build/qrcode.js"></script>
+</head>
+<body>
+	<h1>Generating QR codes</h1>
+	<canvas height="500" width="500" id="canvas"></canvas>
+	<script>
+		const canvas = document.getElementById('canvas')
+
+		const qrcodes = []
+		for (let i=0; i<5; i++) {
+			qrcodes.push(QRCode.create(`${i}`))
+		}
+
+		let i = 0;
+		function renderNext() {
+			const whichQrCode = i % qrcodes.length
+			QRCode.toCanvas(canvas, qrcodes[whichQrCode].segments)
+			i++
+			setTimeout(renderNext, 200)
+		}
+		renderNext()
+	</script>
+</body>
+</html>
