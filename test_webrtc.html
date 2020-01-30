@@ -24,6 +24,18 @@
 		4: 'KANJI'
 	};
 
+	function throttle(func, wait = 100) {
+		let timer = null;
+		return function(...args) {
+			if (timer === null) {
+				timer = setTimeout(() => {
+					func.apply(this, args);
+					timer = null;
+				}, wait); 
+			}
+		};
+	}
+
 	function log() {
 		if (!DEBUG) return;
 		var now = Date.now();
@@ -43,7 +55,7 @@
 		 */
 		log('gofill')
 		for (var i=0, j=0; i < data.length; i+=4, j++) {
-			Module.HEAPU8[image + j] = 0.2989 * data[i + 0] + 0.5870 * data[i + 1] + 0.1140 * data[i + 2] ;
+			Module.HEAPU8[image + j] = 0.2989 * data[i + 0] + 0.5870 * data[i + 1] + 0.1140 * data[i + 2];
 		}
 
 		log('writing');
@@ -108,23 +120,21 @@
 	var video = document.createElement('video');
 	video.autoplay = true;
 
-	navigator.getUserMedia  = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia || navigator.msGetUserMedia;
-
 	var tw = 640 // 320 // 640 // 1280;
 	var th = 480 // 240 // 480 // 720
 
 	var hdConstraints = {
 		audio: false,
 		video: {
-			mandatory: {
-				maxWidth: tw,
-				maxHeight: th
-			}
+			width: { min: 768 },
+			facingMode: 'environment'
 		}
 	};
 
-	if (navigator.getUserMedia) {
-		navigator.getUserMedia(hdConstraints, success, errorCallback);
+	if (navigator.mediaDevices.getUserMedia) {
+		navigator.mediaDevices.getUserMedia(hdConstraints)
+		.then(success)
+		.catch(errorCallback);
 	} else {
 		errorCallback('');
 	}
@@ -136,13 +146,12 @@
 	function success(stream) {
 		console.log('success', stream);
 		video.srcObject = stream;
+		video.setAttribute("playsinline", true);
 		video.onclick = function() { video.play(); };
 		video.play();
 
 		function getFrame() {
-			requestAnimationFrame(getFrame);
-
-			if (!video.videoWidth) return;
+			if (!video.videoWidth) return requestAnimationFrame(getFrame);
 
 			if (!image) {
 				width = video.videoWidth, height = video.videoHeight;
@@ -151,7 +160,7 @@
 				var canvas = document.createElement('canvas');
 				canvas.width = width;
 				canvas.height = height;
-				canvas.style.transform = 'scale(-1, 1)';
+				// canvas.style.transform = 'scale(-1, 1)';
 
 				ctx = canvas.getContext('2d');
 				document.body.appendChild(canvas);
@@ -160,15 +169,16 @@
 				
 				image = Module._xsetup(width, height);
 				log('_xsetup', image, 'pointer');
-				return;
+				return requestAnimationFrame(getFrame);
 			}
 			log('interval')
 			// console.time('a')
 			ctx.drawImage(video, 0, 0, width, height);
 			var imageData = ctx.getImageData(0,0, width, height);
 			data = imageData.data;
-			gofill();
+			throttle(gofill(), 100);
 			// console.timeEnd('a')
+			requestAnimationFrame(getFrame);
 		}
 
 		getFrame();
